@@ -1,14 +1,13 @@
+import os
+import re
+import random
+import collections
+import copy
+from string import Template as strTemplate
 import troposphere.ec2 as ec2
 import troposphere.elasticloadbalancing as elb
 import troposphere.elasticloadbalancingv2 as alb
 import troposphere.elasticache as elasticache
-import os
-import yaml
-import random
-import alb
-import collections
-import copy
-from string import Template as strTemplate
 from troposphere import constants, ImportValue
 from troposphere import FindInMap, GetAtt, Join, Ref, Tags, Template, rds, Base64, Sub, If
 from troposphere.autoscaling import AutoScalingGroup, LaunchConfiguration
@@ -21,12 +20,21 @@ from troposphere.elasticsearch import Domain, EBSOptions
 from troposphere.elasticsearch import ElasticsearchClusterConfig
 from troposphere.elasticsearch import SnapshotOptions
 import troposphere.kinesis as kinesis
+import troposphere.cloudtrail as cloudtrail
+import troposphere.glue as glue
+import troposphere.logs as logs
+import troposphere.awslambda as awslambda
+import troposphere.iam as iam
+import troposphere.s3 as s3
 from troposphere.cloudfront import Distribution, DistributionConfig
 from troposphere.cloudfront import Origin, DefaultCacheBehavior, ViewerCertificate
 from troposphere.cloudfront import ForwardedValues
-from troposphere.cloudfront import S3Origin, CustomOrigin
+from troposphere.cloudfront import S3Origin, CustomOriginConfig
 from troposphere import Output
 from troposphere import Parameter, Equals
+import yaml
+import stack_modules.common_modules.alb as alb
+import stack_modules.common_modules.helpers as helpers
 
 # creating an override for templating here, with a custom delimiter.
 
@@ -55,30 +63,36 @@ class StackConfig(object):
         try:
             self.config
             return self.config
-        except Exception as e:
-            print "Configuration file could not be found"
-            exit()
-
-    def loadlocalconfig(self, filename):
-        mydir = os.path.dirname(os.path.abspath(__file__))
-        relative_path = os.path.join(mydir, '..', "config")
-        for loc in os.getcwd(), os.path.expanduser("~"), "/etc/stack_generator/", \
-                   os.getcwd() + '/config', relative_path:
-            try:
-                with open(os.path.join(loc, filename), 'r') as f:
-                    self.localconfig = yaml.load(f)
-                    new_config = self.config.copy()
-                    new_config.update(self.localconfig)
-                    self.config = new_config
-            except IOError:
-                pass
-        try:
-            self.config
-            return self.config
         except:
             print "Configuration file could not be found"
             exit()
 
+    def loadlocalconfig(self, filename):
+        if isinstance(filename, file):
+            self.localconfig = yaml.load(filename.read())
+            new_config = self.config.copy()
+            new_config.update(self.localconfig)
+            self.config = new_config
+            return self.config
+        else:
+            mydir = os.path.dirname(os.path.abspath(__file__))
+            relative_path = os.path.join(mydir, '..', "config")
+            for loc in os.getcwd(), os.path.expanduser("~"), "/etc/stack_generator/", \
+                    os.getcwd() + '/config', relative_path:
+                try:
+                    with open(os.path.join(loc, filename), 'r') as f:
+                        self.localconfig = yaml.load(f)
+                        new_config = self.config.copy()
+                        new_config.update(self.localconfig)
+                        self.config = new_config
+                except IOError:
+                    pass
+            try:
+                self.config
+                return self.config
+            except:
+                print "Configuration file could not be found"
+                exit()
 
 class Stack(StackConfig):
     def __init__(self, stack_object):
@@ -534,6 +548,45 @@ class Stack(StackConfig):
         ))
         return es_domain
 
+    def glue_db_adder(self, name):
+        self.template.add_resource(glue.Database(
+            name,
+            CatalogId=Ref("AWS::AccountId"),
+            DatabaseInput=glue.DatabaseInput(
+                Name=name
+            )
+        ))
+
+    def glue_table_adder(self, name, db, props):
+        unique_id = re.sub('[^A-Za-z]', '', name) + db
+        table = glue.Table(
+            unique_id,
+            DependsOn=db,
+            CatalogId=Ref("AWS::AccountId"),
+            DatabaseName=db,
+            TableInput=glue.TableInput(
+                Name=name,
+                Parameters=helpers.dictConvert(props.get("params", None)),
+                StorageDescriptor=glue.StorageDescriptor(
+                    InputFormat=props.get("descriptor", {}).get("inputFormat", Ref("AWS::NoValue")),
+                    OutputFormat=props.get("descriptor", {}).get("outputFormat", Ref("AWS::NoValue")),
+                    Location=props.get("descriptor", {}).get("location", Ref("AWS::NoValue")),
+                    SerdeInfo=glue.SerdeInfo(
+                        SerializationLibrary=props.get("descriptor", {}).get("SerDe", {}).get("serialization", Ref("AWS::NoValue")),
+                        Parameters=helpers.dictConvert(props.get("descriptor", {}).get("SerDe", {}).get("parameters", None))
+                    )
+                )
+            )
+        )
+        columns = helpers.dictConvert((props.get("descriptor", {}).get("columns", {})))
+        if isinstance(columns, list):
+            for index, item in enumerate(columns):
+                column = glue.Column(**item)
+                columns[index] = column
+
+        table.TableInput.StorageDescriptor.Columns = columns
+        self.template.add_resource(table)
+
     def kinesis_adder(self, name, shards):
         kinesis_stream = self.template.add_resource(kinesis.Stream(
             name,
@@ -547,11 +600,111 @@ class Stack(StackConfig):
             )
         ])
 
+    def cloudtrail_adder(self, name, bucket, cw_group=Ref("AWS::NoValue"), cw_role_arn=Ref("AWS::NoValue")):
+        trail = cloudtrail.Trail(
+            name,
+            TrailName=name,
+            IsLogging=True,
+            S3BucketName=bucket,
+            S3KeyPrefix=Ref("AWS::AccountId"),
+            CloudWatchLogsLogGroupArn=cw_group,
+            CloudWatchLogsRoleArn=cw_role_arn
+        )
+        self.template.add_resource(trail)
+        return trail
+    
+    def s3_policy_adder(self, name, bucket, policy):
+        self.template.add_resource(s3.BucketPolicy(
+            name,
+            Bucket=bucket,
+            PolicyDocument=policy
+        ))
+ 
+    def cloudwatch_log_adder(self, name, metric_filter=None, lambda_name=None):
+        log_group = logs.LogGroup(
+            name,
+            LogGroupName=name
+        )
+        if metric_filter:
+            self.template.add_resource(logs.MetricFilter(
+                name + "filter",
+                DependsOn=name,
+                LogGroupName=name,
+                FilterPattern=metric_filter,
+                MetricTransformations=[logs.MetricTransformation(
+                    name + "transform",
+                    MetricName=name,
+                    MetricNamespace=name,
+                    MetricValue="1"
+                )]
+            ))
+        if lambda_name:
+            self.template.add_resource(logs.SubscriptionFilter(
+                name + "subscribe",
+                DependsOn=name,
+                LogGroupName=name,
+                DestinationArn=GetAtt(lambda_name, "Arn"),
+                FilterPattern=metric_filter
+            ))
+        self.template.add_resource(log_group)
+        return log_group
+    
+    def lambda_adder(self, nameref, role, condition, **kwargs):
+        try:
+            lambda_func = awslambda.Function(
+                nameref,
+                DependsOn=role,
+                Code=awslambda.Code(
+                    S3Bucket=kwargs['s3_bucket'],
+                    S3Key=kwargs['s3_key'],
+                    S3ObjectVersion=If(condition, Ref("AWS::NoValue"), Ref("LambdaVersion"))
+                ),
+                MemorySize=kwargs['memory'],
+                Role=GetAtt(role, "Arn"),
+                Handler=kwargs['handler'],
+                Timeout=kwargs['timeout'],
+                FunctionName=kwargs['name'],
+                Runtime=kwargs['runtime']
+            )
+            self.template.add_resource(lambda_func)
+            return lambda_func
+        except Exception as e:
+            print e
+            print "have you set all the values in your config file?"
+
+    def lambda_policy_adder(self, name, principal):
+        self.template.add_resource(awslambda.Permission(
+            "LambdaPermissionPolicy",
+            DependsOn=name,
+            Action="lambda:InvokeFunction",
+            FunctionName=name,
+            Principal=principal
+        ))
+
+    def iam_adder(self, name, managed_policies, role_policy):
+        role = iam.Role(
+            name,
+            AssumeRolePolicyDocument=role_policy,
+            RoleName=name,
+            ManagedPolicyArns=managed_policies
+        )
+        self.template.add_resource(role)
+        return role
+
+    def iam_policy_adder(self, name, policy):
+        policy = iam.ManagedPolicy(
+            name,
+            ManagedPolicyName=name,
+            PolicyDocument=policy
+        )
+        self.template.add_resource(policy)
+        return policy
+
     def cloudfront_adder(self, static_site=True):
         origin_id = Join("", ["S3-", Ref("S3Name"), Ref("Path")])
         if static_site is True:
             origin = Origin(Id=origin_id, DomainName=Join("", [Ref("S3Name"), ".s3-website-us-east-1.amazonaws.com"]),
-                            OriginPath=Ref("Path"), CustomOriginConfig=CustomOrigin(OriginProtocolPolicy="http-only"))
+                            OriginPath=Ref("Path"), CustomOriginConfig=CustomOriginConfig(OriginProtocolPolicy="http-only"))
         else:
             origin = Origin(Id=origin_id, DomainName=Join("", [Ref("S3Name"), ".s3.amazonaws.com"]),
                             OriginPath=Ref("Path"), S3OriginConfig=S3Origin())

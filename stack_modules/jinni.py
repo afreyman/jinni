@@ -5,7 +5,9 @@ import boto3
 import botocore.session
 import time
 import imp
+import yaml
 from botocore.exceptions import ClientError
+from stack_modules.common_modules.common import Stack, StackConfig
 
 
 # overriding the base ParamType to create a dict type
@@ -64,18 +66,17 @@ class StackParametersConfigObject:
 
         parameter_list.append(new_parameter)
 
-    def set_generator_parameters(self, generator):
+    def update_generator(self, generator, config):
         module = module_import(generator)
-        for key in module.mystack.template.parameters.keys():
-            self.generator_parameters.append(key)
-
-    def set_generator_template(self, generator):
-        module = module_import(generator)
-        self.generator_template = module.mystack.template.to_json()
-
-    def set_generator_capabilities(self, generator):
-        module = module_import(generator)
-        self.capabilities = module.mystack.capabilities
+        if config:
+            mystack = confInit(config)
+            module.generator(mystack)
+            for k, v in mystack.template.parameters.items():
+                self.generator_parameters.append(k)
+            self.generator_template = mystack.template.to_json()
+            self.capabilities = mystack.capabilities
+        else:
+            module.generator()
 
     def validate_input_parameters(self):
         new_generator_parameters = set(self.generator_parameters).difference(self.current_parameters_keys)
@@ -137,6 +138,12 @@ for _, name, _ in pkgutil.iter_modules([pkgpath]):
         i = re.sub('_generator$', '', name)
         module_list.append(i)
 
+#helper function to load the config file and create the object. 
+def confInit(config_file):
+    conf = StackConfig()
+    conf.loadlocalconfig(config_file)
+    mystack = Stack(conf)
+    return mystack
 
 def get_stack_parameters(stack_name):
 
@@ -168,8 +175,8 @@ def update_stack(stack_name, stack):
                                 Capabilities=stack.capabilities)
     except ClientError as e:
         if 'No updates are to be performed' in e.response['Error']['Message']:
-            print "Looks like you're trying to update the stack with the same parameter values that it's already " \
-                  "using. That's not a valid operation"
+            print "Looks like you're trying to update the stack with the same parameter values or template that it's " \
+                  "already using. That's not a valid operation"
             exit()
         else:
             print "Updating failed. Received error: %s" % e
@@ -387,16 +394,16 @@ def list():
 @click.option('--generator', help='Supplying this option will update the template for the stack from the given '
               'generator. If it has new parameters you need to supply them with the'
               ' --parameters flag', default=False)
-def update(stack_name, parameters, generator):
+@click.option('--config', help='if you want to override the default config file at runtime '
+              'or pass the parameters rather that being prompted you can pass this option', type=click.File())
+def update(stack_name, parameters, generator, config):
     """ Updates a stack in AWS. Excepts to receive a stack name followed by
         one or more parameters to update
     """
     stack = StackParametersConfigObject(stack_name, parameters)
 
     if generator:
-        stack.set_generator_parameters(generator)
-        stack.set_generator_template(generator)
-        stack.set_generator_capabilities(generator)
+        stack.update_generator(generator, config)
 
     stack.validate_input_parameters()
     stack.update_stack_parameters()
@@ -439,7 +446,9 @@ def info(stack_name):
 
 @click.command(context_settings=CONTEXT_SETTINGS, short_help='output CloudFormation JSON')
 @click.argument('stack_name', metavar='<name>')
-def show(stack_name):
+@click.option('--config', help='if you want to override the default config file at runtime '
+              'or pass the parameters rather that being prompted you can pass this option', type=click.File())
+def show(stack_name, config):
     """
     \b
     Outputs CloudFormation JSON for the selected stack
@@ -448,7 +457,12 @@ def show(stack_name):
     """
     try:
         module = module_import(stack_name)
-        module.mystack.print_template()
+        if config:
+            mystack = confInit(config)
+            module.generator(mystack)
+            print mystack.template.to_json()
+        else:
+            module.generator()
     except Exception as e:
         print "The module name " + stack_name + " isn't valid or it contains an error"
         print e
@@ -456,7 +470,9 @@ def show(stack_name):
 
 @click.command(context_settings=CONTEXT_SETTINGS, short_help='upload CF template to AWS')
 @click.argument('stack_name', metavar='<name>')
-def upload(stack_name):
+@click.option('--config', help='if you want to override the default config file at runtime '
+              'or pass the parameters rather that being prompted you can pass this option', type=click.File())
+def upload(stack_name, config):
     """
     \b
     This will attempt to ask you for necessary parameters for the selected stack
@@ -471,13 +487,20 @@ def upload(stack_name):
 
     """
     stack_names = []
+    cf_parameters = []
     stack_list = client.list_stacks(
         StackStatusFilter=CF_STATUS_FILTERS)
     for s in stack_list['StackSummaries']:
         stack_names.append(s['StackName'])
+
     module = module_import(stack_name)
-    cf_parameters = []
-    for p, z in sorted(module.mystack.template.parameters.iteritems()):
+    if config:
+        mystack = confInit(config)
+        module.generator(mystack)
+    else:
+        module.generator()
+
+    for p, z in sorted(mystack.template.parameters.iteritems()):
         default_value = None
         description = None
         for k, v in z.properties.iteritems():
@@ -503,7 +526,7 @@ def upload(stack_name):
         parameter_set = {'ParameterKey': p, 'ParameterValue': parameter_value}
         cf_parameters.append(parameter_set)
 
-    app_value = module.mystack.config.get('apps', None)
+    app_value = mystack.config.get('apps', None)
     if app_value:
         app_name = app_value.keys()[0]
     else:
@@ -516,8 +539,8 @@ def upload(stack_name):
         stack_name = click.prompt('The name ' + stack_name + " is already taken. Use something else")
 
     try:
-        client.create_stack(StackName=stack_name, TemplateBody=str(module.mystack.template.to_json()),
-                            Parameters=cf_parameters, Capabilities=module.mystack.capabilities)
+        client.create_stack(StackName=stack_name, TemplateBody=str(mystack.template.to_json()),
+                            Parameters=cf_parameters, Capabilities=mystack.capabilities)
         time.sleep(10)
     except Exception as e:
         print "Error in attempting to create the stack"
@@ -585,7 +608,9 @@ def deploy(stack_name, ami_id):
 
 @click.command(context_settings=CONTEXT_SETTINGS, short_help='validate a module against AWS CF API')
 @click.argument('stack_name', metavar='<name>')
-def validate(stack_name):
+@click.option('--config', help='if you want to override the default config file at runtime '
+              'or pass the parameters rather that being prompted you can pass this option', type=click.File())
+def validate(stack_name, config=None):
     """
     \b
     Validates generated CloudFormation JSON for the selected module
@@ -594,6 +619,12 @@ def validate(stack_name):
     """
     try:
         module = module_import(stack_name)
+        if config:
+            mystack = confInit(config)
+            module.generator(mystack)
+            print mystack.template.to_json()
+        else:
+            module.generator()
 
     except Exception as e:
         print "The module name " + stack_name + " isn't valid or it contains an error"
@@ -601,7 +632,7 @@ def validate(stack_name):
         exit(1)
 
     try:
-        client.validate_template(TemplateBody=module.mystack.template.to_json())
+        client.validate_template(TemplateBody=mystack.template.to_json())
         print "Module looks good!"
         exit(0)
 

@@ -15,6 +15,6 @@ setup(
     author_email='',
     description='CloudFormation Generator',
     install_requires=[
-        'Click==6.6', 'boto3==1.4.1', 'troposphere==1.9.0', 'pyyaml==3.12', 'ipaddress==1.0.22', 'awacs==0.7.2'
+        'Click==6.6', 'boto3==1.4.1', 'troposphere==2.4.1', 'pyyaml==3.13', 'ipaddress==1.0.22', 'awacs==0.7.2'
     ],
 )

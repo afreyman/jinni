@@ -1,0 +1,59 @@
+databases:
+    - import:
+        tables:
+            spans:
+    - lts:
+        tables:
+            visits:
+                "params": >
+                    {"presto_view": "TRUE"}
+    - volatile:
+        tables:
+            conclusions:
+                "params": >
+                    {"presto_view": "TRUE"}
+            places:
+                "params": >
+                    {"presto_view": "TRUE"}
+            segments:
+                "params": >
+                    {"presto_view": "TRUE"}
+            spans:
+                "params": >
+                    {"presto_view": "TRUE"}
+            visits:
+                "params": >
+                    {"presto_view": "TRUE"}
+    - cloudtrail:
+        tables:
+            cloudtrail_logs:
+                "params": >
+                    {"EXTERNAL": "TRUE"}
+                descriptor:
+                    "columns": >
+                        [{"Name":"eventversion","Type":"string"},{"Name":"useridentity","Type":"struct<type:string,principalid:string,arn:string,accountid:string,invokedby:string,accesskeyid:string,userName:string,sessioncontext:struct<attributes:struct<mfaauthenticated:string,creationdate:string>,sessionIssuer:struct<type:string,principalId:string,arn:string,accountId:string,userName:string>>>"},
+                        {"Name":"eventtime","Type":"string"},{"Name":"eventsource","Type":"string"},{"Name":"eventname","Type":"string"},{"Name":"awsregion","Type":"string"},{"Name":"sourceipaddress","Type":"string"},{"Name":"useragent","Type":"string"},{"Name":"errorcode","Type":"string"},{"Name":"errormessage","Type":"string"},{"Name":"requestid","Type":"string"},{"Name":"eventid","Type":"string"},
+                        {"Name":"resources","Type":"array<struct<ARN:string,accountId:string,type:string>>"},{"Name":"eventtype","Type":"string"},{"Name":"apiversion","Type":"string"},{"Name":"readonly","Type":"boolean"},{"Name":"recipientaccountid","Type":"string"},{"Name":"sharedeventid","Type":"string"},{"Name":"vpcendpointid","Type":"string"},{"Name":"requestparameters","Type":"string"},
+                        {"Name":"responseelements","Type":"string"},{"Name":"additionaleventdata","Type":"string"},{"Name":"serviceeventdetails","Type":"string"}]
+                    "location": "s3://factual-cloudtrail"
+                    "inputFormat": "com.amazon.emr.cloudtrail.CloudTrailInputFormat"
+                    "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+                    SerDe:
+                        "serialization": "com.amazon.emr.hive.serde.CloudTrailSerde"
+                        "parameters": >
+                            {"serialization.format": "1"}
+            athena_api_output:
+                "params": >
+                    {"EXTERNAL": "TRUE"}
+                descriptor:
+                    "columns": >
+                        [{"Name":"queryid","Type":"string"},{"Name":"querydatabase","Type":"string"},{"Name":"executiontime","Type":"bigint"},{"Name":"datascanned","Type":"bigint"},
+                        {"Name":"status","Type":"string"},{"Name":"submissiondatetime","Type":"string"},{"Name":"completiondatetime","Type":"string"},{"Name":"outputlocation","Type":"string"},
+                        {"Name":"query","Type":"string"},{"Name":"issue","Type":"string"},{"Name":"product","Type":"string"},{"Name":"account","Type":"string"},{"Name":"requestor","Type":"string"}]
+                    "location": "s3://factual-cloudtrail/athena-api-output"
+                    "inputFormat": "org.apache.hadoop.mapred.TextInputFormat"
+                    "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+                    SerDe:
+                        "serialization": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe"
+                        "parameters": >
+                            {"escape.delim": "\\","field.delim": ",","serialization.format": ","}

@@ -1,0 +1,19 @@
+# this is a reference configuration for a glue setup. 
+# databases: (key that has to be present)
+#    - <database_name>: (arbitrary amount of dbs can be specified)
+#        tables: (key that has to be present)
+#            <table_name>: (arbitrary amount of tables can be specified)
+# all the keys below (which are table properties) are optional
+#              "params": >
+#                  (json blob of params)
+#               "descriptor": (storage descriptor property)
+#                   "columns": > 
+#                        (json blob of columns)
+#                   "location":
+#                   "inputFormat":
+#                   "outputFormat":
+#                "SerDe": (serde info)
+#                    "serialization": (serialization engine)
+#                    "parameters": >
+#                        (json blob of params)
+
