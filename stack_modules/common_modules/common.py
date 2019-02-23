@@ -40,10 +40,12 @@ import stack_modules.common_modules.helpers as helpers
 
 
 class MyTemplate(strTemplate):
+    ''' Just changing the delimiter '''
     delimiter = '$$'
 
 
 class StackConfig(object):
+    ''' add a config object for the stack '''
     def __init__(self):
 
         self.localconfig = None
@@ -95,6 +97,7 @@ class StackConfig(object):
                 exit()
 
 class Stack(StackConfig):
+    ''' main stack object '''
     def __init__(self, stack_object):
         self.config = stack_object.config
         self.template = Template()
@@ -612,14 +615,14 @@ class Stack(StackConfig):
         )
         self.template.add_resource(trail)
         return trail
-    
+
     def s3_policy_adder(self, name, bucket, policy):
         self.template.add_resource(s3.BucketPolicy(
             name,
             Bucket=bucket,
             PolicyDocument=policy
         ))
- 
+
     def cloudwatch_log_adder(self, name, metric_filter=None, lambda_name=None):
         log_group = logs.LogGroup(
             name,
@@ -648,7 +651,7 @@ class Stack(StackConfig):
             ))
         self.template.add_resource(log_group)
         return log_group
-    
+ 
     def lambda_adder(self, nameref, role, condition, **kwargs):
         try:
             lambda_func = awslambda.Function(
